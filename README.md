@@ -50,6 +50,8 @@ pip install -r requirements.txt
 python bot.py
 ```
 
+> Semua dependensi **pure-Python** (python-telegram-bot, python-dotenv, httpx). Gemini dipanggil via REST API, jadi **tidak butuh Rust/kompilasi** — aman untuk Termux/Android.
+
 ## Isi file `.env`
 ```ini
 TELEGRAM_BOT_TOKEN=123456:ABC-token-dari-botfather

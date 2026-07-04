@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-ai-agent-v2 — Telegram AI Agent bertenaga Google Gemini.
-Dibuat untuk berjalan di Termux (Android) atau server mana pun.
+ai-agent-v2 — Telegram AI Agent bertenaga Google Gemini (via REST, ramah Termux).
 
 Cara pakai:
     1. Salin .env.example menjadi .env, lalu isi tokennya.
@@ -16,7 +15,6 @@ import logging
 from collections import defaultdict, deque
 
 from dotenv import load_dotenv
-import google.generativeai as genai
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -28,6 +26,7 @@ from telegram.ext import (
 )
 
 import crypto
+import gemini
 import github_auth as ghauth
 
 # ----------------------------------------------------------------------------
@@ -37,8 +36,22 @@ load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
+MAX_HISTORY_TURNS = int(os.getenv("MAX_HISTORY_TURNS", "12"))
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger("ai-agent-v2")
+
+if not TELEGRAM_BOT_TOKEN:
+    raise SystemExit("ERROR: TELEGRAM_BOT_TOKEN belum diisi di .env")
+if not GEMINI_API_KEY:
+    raise SystemExit("ERROR: GEMINI_API_KEY belum diisi di .env")
+
+
 def _load_system_prompt() -> str:
     """Prioritas: env SYSTEM_PROMPT > file system_prompt.md (Fable 5) > default."""
     env_prompt = os.getenv("SYSTEM_PROMPT")
@@ -55,33 +68,27 @@ def _load_system_prompt() -> str:
 
 
 SYSTEM_PROMPT = _load_system_prompt()
-# Berapa banyak pasang pesan (user+bot) yang diingat per chat.
-MAX_HISTORY_TURNS = int(os.getenv("MAX_HISTORY_TURNS", "12"))
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
-logger = logging.getLogger("ai-agent-v2")
-
-if not TELEGRAM_BOT_TOKEN:
-    raise SystemExit("ERROR: TELEGRAM_BOT_TOKEN belum diisi di .env")
-if not GEMINI_API_KEY:
-    raise SystemExit("ERROR: GEMINI_API_KEY belum diisi di .env")
-
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel(
-    model_name=GEMINI_MODEL,
-    system_instruction=SYSTEM_PROMPT,
-)
-
-# Riwayat percakapan per chat_id (disimpan di memori).
-# Format Gemini: [{"role": "user"/"model", "parts": [teks]}, ...]
+# Riwayat percakapan per chat_id (format REST Gemini).
 history = defaultdict(lambda: deque(maxlen=MAX_HISTORY_TURNS * 2))
 
 
 # ----------------------------------------------------------------------------
-# Handlers
+# Util
+# ----------------------------------------------------------------------------
+async def _reply_long(update: Update, text: str) -> None:
+    if not text:
+        text = "(kosong)"
+    for i in range(0, len(text), 4000):
+        await update.message.reply_text(text[i : i + 4000], disable_web_page_preview=True)
+
+
+async def _ask_gemini(contents: list[dict]) -> str:
+    return await gemini.generate(GEMINI_API_KEY, GEMINI_MODEL, contents, SYSTEM_PROMPT)
+
+
+# ----------------------------------------------------------------------------
+# Perintah dasar
 # ----------------------------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
@@ -126,37 +133,23 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     convo = history[chat_id]
-    convo.append({"role": "user", "parts": [user_text]})
+    convo.append(gemini.user_msg(user_text))
 
     try:
-        response = model.generate_content(list(convo))
-        reply = (response.text or "").strip() or "Maaf, aku tidak punya jawaban untuk itu."
+        reply = await _ask_gemini(list(convo))
     except Exception as e:  # noqa: BLE001
         logger.exception("Gemini error")
-        reply = f"⚠️ Terjadi error saat memproses: {e}"
-        # Jangan simpan giliran yang gagal.
-        convo.pop()
-        await update.message.reply_text(reply)
+        convo.pop()  # jangan simpan giliran yang gagal
+        await update.message.reply_text(f"⚠️ Terjadi error: {e}")
         return
 
-    convo.append({"role": "model", "parts": [reply]})
-
-    # Telegram batasi 4096 karakter per pesan.
-    for i in range(0, len(reply), 4000):
-        await update.message.reply_text(reply[i : i + 4000])
+    convo.append(gemini.model_msg(reply))
+    await _reply_long(update, reply)
 
 
-async def _reply_long(update: Update, text: str) -> None:
-    """Kirim balasan, pecah otomatis kalau melebihi batas Telegram (4096)."""
-    if not text:
-        text = "(kosong)"
-    for i in range(0, len(text), 4000):
-        await update.message.reply_text(text[i : i + 4000], disable_web_page_preview=True)
-
-
-# ---------------------------------------------------------------------------
-# Command crypto
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# Perintah crypto
+# ----------------------------------------------------------------------------
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
         await update.message.reply_text("Format: /price <nama/simbol coin>\nContoh: /price solana")
@@ -232,9 +225,9 @@ async def rug(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Deep Research Pro — analisa meme coin pakai Gemini
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# Deep Research Pro
+# ----------------------------------------------------------------------------
 DEEP_RESEARCH_INSTRUCTION = (
     "Kamu analis crypto meme coin. Berdasarkan DATA on-chain di bawah (fakta nyata, "
     "jangan mengarang angka), buat analisa ringkas dalam Bahasa Indonesia dengan format:\n"
@@ -275,10 +268,9 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         + json.dumps(facts, indent=2, ensure_ascii=False, default=str)
     )
     try:
-        resp = await asyncio.to_thread(model.generate_content, prompt)
-        text = (resp.text or "").strip()
+        text = await _ask_gemini([gemini.user_msg(prompt)])
     except Exception as e:  # noqa: BLE001
-        logger.exception("Gemini deep research error")
+        logger.exception("Deep research error")
         await update.message.reply_text(f"⚠️ Error saat analisa: {e}")
         return
     dex_url = (facts.get("dex") or {}).get("url")
@@ -287,11 +279,10 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _reply_long(update, text)
 
 
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 # GitHub — /login, /logout, /github (OAuth Device Flow)
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 async def _finish_login(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, device: dict) -> None:
-    """Berjalan di background: tunggu user mengizinkan di GitHub."""
     res = await ghauth.poll_for_token(
         GITHUB_CLIENT_ID,
         device["device_code"],
@@ -384,6 +375,7 @@ async def github_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
+# ----------------------------------------------------------------------------
 def main() -> None:
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
