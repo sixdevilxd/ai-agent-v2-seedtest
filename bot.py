@@ -33,11 +33,22 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-SYSTEM_PROMPT = os.getenv(
-    "SYSTEM_PROMPT",
-    "Kamu adalah ai-agent-v2, asisten AI yang ramah, cerdas, dan menjawab "
-    "dengan bahasa yang sama seperti yang dipakai pengguna. Jawab ringkas dan jelas.",
-)
+def _load_system_prompt() -> str:
+    """Prioritas: env SYSTEM_PROMPT > file system_prompt.md (Fable 5) > default."""
+    env_prompt = os.getenv("SYSTEM_PROMPT")
+    if env_prompt:
+        return env_prompt
+    prompt_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_prompt.md")
+    if os.path.exists(prompt_file):
+        with open(prompt_file, encoding="utf-8") as f:
+            return f.read()
+    return (
+        "Kamu adalah ai-agent-v2, asisten AI yang ramah, cerdas, dan menjawab "
+        "dengan bahasa yang sama seperti yang dipakai pengguna. Jawab ringkas dan jelas."
+    )
+
+
+SYSTEM_PROMPT = _load_system_prompt()
 # Berapa banyak pasang pesan (user+bot) yang diingat per chat.
 MAX_HISTORY_TURNS = int(os.getenv("MAX_HISTORY_TURNS", "12"))
 

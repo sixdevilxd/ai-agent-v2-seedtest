@@ -7,6 +7,8 @@ AI agent Telegram bertenaga **Google Gemini**, dirancang untuk berjalan di **Ter
 - Ingat konteks percakapan per chat
 - Perintah `/start`, `/help`, `/reset`
 - Konfigurasi lewat file `.env` (aman, tidak ikut ter-commit)
+- **Skill "Fable 5" (lite)**: kepribadian & disiplin kerja agent diatur lewat `system_prompt.md`
+  (jawab langsung, ringkas, ambil inisiatif, ikut bahasa pengguna). Bisa ditimpa lewat env `SYSTEM_PROMPT`.
 
 ## Yang dibutuhkan
 1. **Token bot Telegram** — buat lewat [@BotFather](https://t.me/BotFather) (`/newbot`).
