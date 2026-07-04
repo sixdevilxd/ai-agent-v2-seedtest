@@ -1,5 +1,6 @@
 # Rahasia — jangan pernah di-commit
 .env
+gh_tokens.json
 
 # Python
 __pycache__/

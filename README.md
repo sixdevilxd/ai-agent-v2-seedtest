@@ -14,6 +14,10 @@ AI agent Telegram bertenaga **Google Gemini**, dirancang untuk berjalan di **Ter
   - `/new` — meme coin baru terdeteksi (DexScreener)
   - `/rug <mint>` — rug check + sebaran holder untuk token Solana (RugCheck)
   - `/analyze <address>` — **Deep Research Pro**: narasi/angle, potensi hype, rug check, anti-whale — dirangkai oleh Gemini dari data on-chain nyata
+- **Login GitHub** (OAuth Device Flow, tanpa paste token):
+  - `/login` — hubungkan akun GitHub ke bot (buka link + masukkan kode)
+  - `/github` — lihat akun GitHub yang terhubung
+  - `/logout` — putuskan koneksi GitHub
 
 ## Yang dibutuhkan
 1. **Token bot Telegram** — buat lewat [@BotFather](https://t.me/BotFather) (`/newbot`).
@@ -54,6 +58,19 @@ GEMINI_MODEL=gemini-1.5-flash        # opsional
 SYSTEM_PROMPT=Kamu adalah ai-agent-v2 # opsional
 MAX_HISTORY_TURNS=12                   # opsional
 ```
+
+## Setup fitur `/login` GitHub (opsional)
+1. Buka https://github.com/settings/developers → **New OAuth App**.
+   - Homepage URL: bebas (mis. `https://github.com/username`)
+   - Callback URL: boleh diisi sembarang (device flow tidak memakainya)
+2. Buka app-nya, centang **Enable Device Flow**.
+3. Salin **Client ID**, taruh di `.env`:
+   ```ini
+   GITHUB_CLIENT_ID=Iv1.xxxxxxxx
+   ```
+4. Di Telegram: `/login` → buka link yang muncul → masukkan kode. Selesai.
+
+Token per user disimpan lokal di `gh_tokens.json` (sudah masuk `.gitignore`, tidak ikut ter-commit). Putuskan kapan saja dengan `/logout`.
 
 ## Biar tetap jalan di background (Termux)
 ```bash

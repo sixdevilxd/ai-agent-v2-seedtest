@@ -28,6 +28,7 @@ from telegram.ext import (
 )
 
 import crypto
+import github_auth as ghauth
 
 # ----------------------------------------------------------------------------
 # Konfigurasi
@@ -36,6 +37,7 @@ load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 def _load_system_prompt() -> str:
     """Prioritas: env SYSTEM_PROMPT > file system_prompt.md (Fable 5) > default."""
@@ -89,6 +91,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "🆕 /new - meme coin baru terdeteksi\n"
         "🛡️ /rug <mint> - cek rug + sebaran holder (Solana)\n"
         "🔬 /analyze <address> - *Deep Research Pro* (narasi, hype, rug, anti-whale)\n\n"
+        "🔐 /login - hubungkan akun GitHub\n"
+        "🐙 /github - lihat akun GitHub terhubung\n"
+        "🚪 /logout - putuskan GitHub\n\n"
         "/reset - hapus ingatan percakapan\n"
         "/help - bantuan",
         parse_mode="Markdown",
@@ -102,6 +107,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/new — meme coin baru\n"
         "/rug <mint> — rug check (Solana)\n"
         "/analyze <address> — Deep Research Pro\n"
+        "/login — hubungkan GitHub\n"
+        "/github — akun GitHub terhubung\n"
+        "/logout — putuskan GitHub\n"
         "/reset — mulai percakapan baru"
     )
 
@@ -279,6 +287,103 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _reply_long(update, text)
 
 
+# ---------------------------------------------------------------------------
+# GitHub — /login, /logout, /github (OAuth Device Flow)
+# ---------------------------------------------------------------------------
+async def _finish_login(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, device: dict) -> None:
+    """Berjalan di background: tunggu user mengizinkan di GitHub."""
+    res = await ghauth.poll_for_token(
+        GITHUB_CLIENT_ID,
+        device["device_code"],
+        int(device.get("interval", 5)),
+        int(device.get("expires_in", 900)),
+    )
+    if res.get("ok"):
+        ghauth.set_token(user_id, res["token"])
+        try:
+            u = await ghauth.get_github_user(res["token"])
+            name = u.get("login", "?")
+            await context.bot.send_message(
+                chat_id,
+                f"✅ GitHub terhubung sebagai *{name}*!\nCek dengan /github, putuskan dengan /logout.",
+                parse_mode="Markdown",
+            )
+        except Exception:  # noqa: BLE001
+            await context.bot.send_message(chat_id, "✅ GitHub terhubung!")
+    else:
+        reasons = {
+            "timeout": "waktu habis",
+            "expired_token": "kode kadaluarsa",
+            "access_denied": "akses ditolak",
+        }
+        await context.bot.send_message(
+            chat_id, f"❌ Login gagal ({reasons.get(res.get('error'), res.get('error'))}). Coba /login lagi."
+        )
+
+
+async def login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if not GITHUB_CLIENT_ID:
+        await update.message.reply_text(
+            "⚠️ GITHUB_CLIENT_ID belum di-set di .env.\n"
+            "Buat OAuth App di https://github.com/settings/developers, "
+            "aktifkan *Enable Device Flow*, lalu isi GITHUB_CLIENT_ID di .env.",
+            parse_mode="Markdown",
+        )
+        return
+    if ghauth.get_token(user_id):
+        await update.message.reply_text("Kamu sudah terhubung. /github untuk lihat, /logout untuk putuskan.")
+        return
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    try:
+        device = await ghauth.start_device_flow(GITHUB_CLIENT_ID)
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(f"⚠️ Gagal memulai login: {e}")
+        return
+    await update.message.reply_text(
+        "🔐 *Hubungkan GitHub:*\n\n"
+        f"1. Buka: {device['verification_uri']}\n"
+        f"2. Masukkan kode: `{device['user_code']}`\n\n"
+        "Aku tunggu sampai kamu selesai mengizinkan (jangan tutup chat).",
+        parse_mode="Markdown",
+    )
+    context.application.create_task(
+        _finish_login(context, update.effective_chat.id, user_id, device)
+    )
+
+
+async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    removed = ghauth.remove_token(update.effective_user.id)
+    if removed:
+        await update.message.reply_text("👋 GitHub sudah diputuskan dari bot.")
+    else:
+        await update.message.reply_text("Kamu belum terhubung ke GitHub. Pakai /login.")
+
+
+async def github_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    token = ghauth.get_token(update.effective_user.id)
+    if not token:
+        await update.message.reply_text("Belum terhubung. Pakai /login untuk menghubungkan GitHub.")
+        return
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    try:
+        u = await ghauth.get_github_user(token)
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(
+            f"⚠️ Token tidak valid lagi ({e}). Coba /logout lalu /login ulang."
+        )
+        return
+    await update.message.reply_text(
+        f"🐙 *GitHub terhubung*\n"
+        f"User: {u.get('login')}\n"
+        f"Nama: {u.get('name') or '-'}\n"
+        f"Public repos: {u.get('public_repos')}\n"
+        f"Followers: {u.get('followers')}\n"
+        f"Profil: {u.get('html_url')}",
+        parse_mode="Markdown",
+    )
+
+
 def main() -> None:
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -289,6 +394,9 @@ def main() -> None:
     app.add_handler(CommandHandler("new", new_meme))
     app.add_handler(CommandHandler("rug", rug))
     app.add_handler(CommandHandler("analyze", analyze))
+    app.add_handler(CommandHandler("login", login))
+    app.add_handler(CommandHandler("logout", logout))
+    app.add_handler(CommandHandler("github", github_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 
     logger.info("ai-agent-v2 berjalan. Tekan Ctrl+C untuk berhenti.")
