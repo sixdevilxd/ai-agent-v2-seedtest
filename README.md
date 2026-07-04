@@ -3,24 +3,24 @@
 AI agent Telegram bertenaga **Google Gemini**, dirancang untuk berjalan di **Termux** (Android) atau server mana pun.
 
 ## Fitur
-- Balas pesan Telegram pakai Gemini
-- Ingat konteks percakapan per chat
-- Perintah `/start`, `/help`, `/reset`
+- Balas pesan Telegram pakai Gemini, ingat konteks percakapan per chat
 - Konfigurasi lewat file `.env` (aman, tidak ikut ter-commit)
-- **Skill "Fable 5" (lite)**: kepribadian & disiplin kerja agent diatur lewat `system_prompt.md`
-  (jawab langsung, ringkas, ambil inisiatif, ikut bahasa pengguna). Bisa ditimpa lewat env `SYSTEM_PROMPT`.
-- **Crypto realtime + Deep Research Pro** (API gratis, tanpa key):
-  - `/price <coin>` — harga realtime, market cap, volume (CoinGecko)
-  - `/new` — meme coin baru terdeteksi (DexScreener)
-  - `/rug <mint>` — rug check + sebaran holder untuk token Solana (RugCheck)
-  - `/analyze <address>` — **Deep Research Pro**: narasi/angle, potensi hype, rug check, anti-whale — dirangkai oleh Gemini dari data on-chain nyata
-  - `/scan` & `/stopscan` — **scanner new pairs Solana tiap 5 detik** (GeckoTerminal; GMGN diblokir Cloudflare untuk bot)
-- **Skill coding & reasoning**:
-  - `/code <tugas>` — tulis kode di bahasa/framework apa pun
-  - `/reason <soal>` — analisis mendalam langkah demi langkah
-- **Riset web & media sosial** (gratis, tanpa key):
-  - `/research <topik>` — riset web (DuckDuckGo) + rangkuman bersumber
-  - `/social [x|reddit|linkedin|facebook|all] <topik>` — riset sentimen/narasi lintas platform
+- **Semua skill dijalankan lewat bahasa natural (function calling)** — nggak perlu command.
+  AI otomatis memanggil tool yang tepat berdasarkan permintaanmu:
+  - **Crypto realtime** — "harga solana berapa?"
+  - **Deep Research meme coin** (narasi, potensi hype, rug check, anti-whale) — "analisa coin ini `<address>`"
+  - **Rug check + sebaran holder** (Solana) — "rugcheck `<mint>`"
+  - **New pairs** — "ada token baru launch apa?"
+  - **Scanner new pairs tiap 5 detik** — "pantau new pairs tiap 5 detik" / "stop scan"
+    (pakai GeckoTerminal; GMGN diblokir Cloudflare untuk bot)
+  - **Riset web** — "cari berita terbaru soal ..."
+  - **Riset sosmed** (X/Reddit/LinkedIn/Facebook) — "cari sentimen X soal bonk"
+  - **Coding semua bahasa** — "buatin script Python untuk ..."
+  - **Reasoning mendalam** — "jelasin dengan reasoning ..."
+- **Skill "Fable 5" (lite) + skills di atas** diatur lewat `system_prompt.md`
+  (jawab langsung, ringkas, ambil inisiatif, pakai tool untuk data faktual, ikut bahasa pengguna).
+  Bisa ditimpa lewat env `SYSTEM_PROMPT`.
+- **Command dasar**: `/start`, `/help`, `/reset`
 - **Login GitHub** (OAuth Device Flow, tanpa paste token):
   - `/login` — hubungkan akun GitHub ke bot (buka link + masukkan kode)
   - `/github` — lihat akun GitHub yang terhubung
