@@ -122,3 +122,82 @@ async def get_github_user(token: str) -> dict:
         r = await c.get(f"{API}/user")
         r.raise_for_status()
         return r.json()
+
+
+# ---------------------------------------------------------------------------
+# Aksi GitHub (pakai token user yang sudah /login)
+# ---------------------------------------------------------------------------
+import base64  # noqa: E402
+
+
+async def _gh(token: str, method: str, path: str, json_body: dict | None = None, params: dict | None = None):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "ai-agent-v2",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as c:
+        r = await c.request(method, f"{API}{path}", json=json_body, params=params)
+    if r.status_code >= 400:
+        try:
+            msg = r.json().get("message", r.text)
+        except Exception:  # noqa: BLE001
+            msg = r.text
+        raise RuntimeError(f"GitHub {r.status_code}: {str(msg)[:200]}")
+    return r.json() if r.text.strip() else {}
+
+
+async def list_repos(token: str, limit: int = 30) -> list[dict]:
+    data = await _gh(token, "GET", "/user/repos", params={"per_page": limit, "sort": "updated"})
+    return [
+        {
+            "full_name": r.get("full_name"),
+            "private": r.get("private"),
+            "description": r.get("description"),
+            "url": r.get("html_url"),
+            "default_branch": r.get("default_branch"),
+        }
+        for r in (data if isinstance(data, list) else [])
+    ]
+
+
+async def read_file(token: str, owner: str, repo: str, path: str, ref: str | None = None) -> dict:
+    params = {"ref": ref} if ref else None
+    data = await _gh(token, "GET", f"/repos/{owner}/{repo}/contents/{path}", params=params)
+    content = data.get("content", "")
+    if data.get("encoding") == "base64" and content:
+        try:
+            content = base64.b64decode(content).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            content = "(gagal decode)"
+    return {"path": data.get("path"), "sha": data.get("sha"), "content": content[:8000]}
+
+
+async def commit_file(
+    token: str, owner: str, repo: str, path: str, content: str, message: str, branch: str | None = None
+) -> dict:
+    """Buat atau update file (satu commit + push). Otomatis handle sha untuk update."""
+    sha = None
+    try:
+        cur = await _gh(
+            token, "GET", f"/repos/{owner}/{repo}/contents/{path}",
+            params={"ref": branch} if branch else None,
+        )
+        sha = cur.get("sha")
+    except RuntimeError:
+        sha = None  # file belum ada -> buat baru
+    body: dict = {"message": message, "content": base64.b64encode(content.encode()).decode()}
+    if branch:
+        body["branch"] = branch
+    if sha:
+        body["sha"] = sha
+    data = await _gh(token, "PUT", f"/repos/{owner}/{repo}/contents/{path}", json_body=body)
+    commit = data.get("commit") or {}
+    return {"ok": True, "commit_url": commit.get("html_url"), "sha": commit.get("sha")}
+
+
+async def create_repo(token: str, name: str, description: str = "", private: bool = False, auto_init: bool = True) -> dict:
+    body = {"name": name, "description": description, "private": private, "auto_init": auto_init}
+    data = await _gh(token, "POST", "/user/repos", json_body=body)
+    return {"full_name": data.get("full_name"), "url": data.get("html_url"), "default_branch": data.get("default_branch")}

@@ -161,6 +161,54 @@ TOOLS = [
                 "description": "Hentikan pemantauan new pairs di chat ini.",
                 "parameters": {"type": "object", "properties": {}},
             },
+            {
+                "name": "github_list_repos",
+                "description": "Daftar repositori GitHub milik user (butuh user sudah /login).",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "github_read_file",
+                "description": "Baca isi sebuah file di repo GitHub user (butuh /login).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "owner": {"type": "string"},
+                        "repo": {"type": "string"},
+                        "path": {"type": "string", "description": "path file dalam repo"},
+                        "branch": {"type": "string", "description": "opsional"},
+                    },
+                    "required": ["owner", "repo", "path"],
+                },
+            },
+            {
+                "name": "github_commit_file",
+                "description": "Buat/ubah file di repo GitHub user lalu commit & push dalam satu langkah (butuh /login). Pakai untuk menulis kode ke repo.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "owner": {"type": "string"},
+                        "repo": {"type": "string"},
+                        "path": {"type": "string"},
+                        "content": {"type": "string", "description": "isi lengkap file"},
+                        "message": {"type": "string", "description": "pesan commit"},
+                        "branch": {"type": "string", "description": "opsional, default branch repo"},
+                    },
+                    "required": ["owner", "repo", "path", "content", "message"],
+                },
+            },
+            {
+                "name": "github_create_repo",
+                "description": "Buat repositori GitHub baru milik user (butuh /login).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "description": {"type": "string"},
+                        "private": {"type": "boolean"},
+                    },
+                    "required": ["name"],
+                },
+            },
         ]
     }
 ]
@@ -239,7 +287,7 @@ def _stop_scanner(chat_id: int) -> str:
 # ----------------------------------------------------------------------------
 # Dispatcher tool
 # ----------------------------------------------------------------------------
-async def _dispatch(name: str, args: dict, context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+async def _dispatch(name: str, args: dict, context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int):
     try:
         if name == "get_price":
             return await crypto.get_price(args.get("query", "")) or {"error": "tidak ditemukan"}
@@ -266,6 +314,26 @@ async def _dispatch(name: str, args: dict, context: ContextTypes.DEFAULT_TYPE, c
             return _start_scanner(context, chat_id, args.get("network", "solana") or "solana")
         if name == "stop_scanner":
             return _stop_scanner(chat_id)
+
+        # ---- GitHub (butuh token dari /login) ----
+        if name.startswith("github_"):
+            token = ghauth.get_token(user_id)
+            if not token:
+                return {"error": "Belum terhubung ke GitHub. Minta user ketik /login dulu."}
+            if name == "github_list_repos":
+                return await ghauth.list_repos(token)
+            if name == "github_read_file":
+                return await ghauth.read_file(token, args["owner"], args["repo"], args["path"], args.get("branch"))
+            if name == "github_commit_file":
+                return await ghauth.commit_file(
+                    token, args["owner"], args["repo"], args["path"],
+                    args["content"], args.get("message", "update via ai-agent-v2"), args.get("branch"),
+                )
+            if name == "github_create_repo":
+                return await ghauth.create_repo(
+                    token, args["name"], args.get("description", ""), bool(args.get("private", False))
+                )
+
         return {"error": f"tool tidak dikenal: {name}"}
     except Exception as e:  # noqa: BLE001
         logger.exception("Tool %s error", name)
@@ -309,6 +377,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
     user_text = update.message.text
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
@@ -329,7 +398,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
             resp_parts = []
             for call in calls:
-                result = await _dispatch(call.get("name", ""), call.get("args") or {}, context, chat_id)
+                result = await _dispatch(call.get("name", ""), call.get("args") or {}, context, chat_id, user_id)
                 resp_parts.append(gemini.function_response(call.get("name", ""), result))
             working.append({"role": "user", "parts": resp_parts})
         else:

@@ -25,6 +25,9 @@ AI agent Telegram bertenaga **Google Gemini**, dirancang untuk berjalan di **Ter
   - `/login` — hubungkan akun GitHub ke bot (buka link + masukkan kode)
   - `/github` — lihat akun GitHub yang terhubung
   - `/logout` — putuskan koneksi GitHub
+  - Setelah login, bot bisa **beraksi di GitHub lewat obrolan**: lihat daftar repo, baca file,
+    buat/ubah file lalu **commit & push**, dan bikin repo baru. Contoh: "buat repo baru namanya X",
+    "commit file bot.py ke repo Y", "baca README repo Z". (butuh scope `repo`)
 
 ## Yang dibutuhkan
 1. **Token bot Telegram** — buat lewat [@BotFather](https://t.me/BotFather) (`/newbot`).
