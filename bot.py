@@ -635,6 +635,13 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 
     logger.info("ai-agent-v2 berjalan. Tekan Ctrl+C untuk berhenti.")
+    # Python 3.14 (Termux) tidak lagi membuat event loop otomatis, sedangkan
+    # python-telegram-bot 21.x memanggil asyncio.get_event_loop(). Kita siapkan
+    # event loop dulu agar run_polling tidak error "no current event loop".
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
