@@ -209,3 +209,36 @@ async def deep_research_facts(address: str) -> dict:
         if report:
             facts["rug"] = summarize_rug(report)
     return facts
+
+
+# ---------------------------------------------------------------------------
+# New pairs scanner — GeckoTerminal (GMGN diblokir Cloudflare untuk bot)
+# ---------------------------------------------------------------------------
+GECKO = "https://api.geckoterminal.com/api/v2"
+
+
+async def new_pairs(network: str = "solana", limit: int = 12) -> list[dict]:
+    """Ambil pool/pair yang baru dibuat di sebuah chain (default Solana)."""
+    data = await _get_json(f"{GECKO}/networks/{network}/new_pools", {"page": 1})
+    out = []
+    for d in (data.get("data") or [])[:limit]:
+        a = d.get("attributes") or {}
+        rel = d.get("relationships") or {}
+        bt = (((rel.get("base_token") or {}).get("data") or {}).get("id") or "")
+        addr = bt.split("_", 1)[1] if "_" in bt else None
+        vol = a.get("volume_usd") or {}
+        out.append(
+            {
+                "id": d.get("id"),
+                "name": a.get("name"),
+                "address": addr,
+                "pool": a.get("address"),
+                "created_at": a.get("pool_created_at"),
+                "price": a.get("base_token_price_usd"),
+                "fdv": a.get("fdv_usd"),
+                "liq": a.get("reserve_in_usd"),
+                "vol_m5": vol.get("m5"),
+                "url": f"https://www.geckoterminal.com/{network}/pools/{a.get('address')}",
+            }
+        )
+    return out

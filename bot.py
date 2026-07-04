@@ -27,6 +27,7 @@ from telegram.ext import (
 
 import crypto
 import gemini
+import research
 import github_auth as ghauth
 
 # ----------------------------------------------------------------------------
@@ -72,6 +73,9 @@ SYSTEM_PROMPT = _load_system_prompt()
 # Riwayat percakapan per chat_id (format REST Gemini).
 history = defaultdict(lambda: deque(maxlen=MAX_HISTORY_TURNS * 2))
 
+# Task scanner new-pairs yang sedang berjalan, per chat_id.
+scan_tasks: dict[int, asyncio.Task] = {}
+
 
 # ----------------------------------------------------------------------------
 # Util
@@ -97,7 +101,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "💵 /price <coin> - harga realtime (CoinGecko)\n"
         "🆕 /new - meme coin baru terdeteksi\n"
         "🛡️ /rug <mint> - cek rug + sebaran holder (Solana)\n"
-        "🔬 /analyze <address> - *Deep Research Pro* (narasi, hype, rug, anti-whale)\n\n"
+        "🔬 /analyze <address> - *Deep Research Pro* (narasi, hype, rug, anti-whale)\n"
+        "📡 /scan - scan new pairs tiap 5 detik | /stopscan\n\n"
+        "🧠 /reason <soal> - analisis mendalam\n"
+        "💻 /code <tugas> - coding semua bahasa\n"
+        "🌐 /research <topik> - riset web\n"
+        "📱 /social [x|reddit|linkedin|facebook] <topik> - riset sosmed\n\n"
         "🔐 /login - hubungkan akun GitHub\n"
         "🐙 /github - lihat akun GitHub terhubung\n"
         "🚪 /logout - putuskan GitHub\n\n"
@@ -114,6 +123,11 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/new — meme coin baru\n"
         "/rug <mint> — rug check (Solana)\n"
         "/analyze <address> — Deep Research Pro\n"
+        "/scan — new pairs tiap 5 detik | /stopscan\n"
+        "/reason <soal> — analisis mendalam\n"
+        "/code <tugas> — coding semua bahasa\n"
+        "/research <topik> — riset web\n"
+        "/social <topik> — riset sosmed (x/reddit/linkedin/facebook)\n"
         "/login — hubungkan GitHub\n"
         "/github — akun GitHub terhubung\n"
         "/logout — putuskan GitHub\n"
@@ -280,6 +294,229 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ----------------------------------------------------------------------------
+# Coding & Reasoning
+# ----------------------------------------------------------------------------
+async def code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text("Format: /code <deskripsi program>\nContoh: /code REST API todo list pakai FastAPI")
+        return
+    task = " ".join(context.args)
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    prompt = (
+        "Tugas coding. Tulis kode LENGKAP dan siap jalan untuk permintaan berikut. "
+        "Pilih bahasa/framework paling sesuai (sebutkan pilihanmu), sertakan penanganan error "
+        "dan cara pakai singkat. Beri kode dalam code block.\n\n"
+        f"Permintaan: {task}"
+    )
+    try:
+        text = await _ask_gemini([gemini.user_msg(prompt)])
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(f"⚠️ Error: {e}")
+        return
+    await _reply_long(update, text)
+
+
+async def reason_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text("Format: /reason <masalah/pertanyaan sulit>")
+        return
+    problem = " ".join(context.args)
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    prompt = (
+        "Selesaikan dengan reasoning mendalam: pikirkan langkah demi langkah, pertimbangkan beberapa "
+        "kemungkinan/hipotesis, uji asumsi, waspadai jebakan logika, lalu beri KESIMPULAN yang jelas "
+        "dan bisa ditindaklanjuti di akhir.\n\n"
+        f"Masalah: {problem}"
+    )
+    try:
+        text = await _ask_gemini([gemini.user_msg(prompt)])
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(f"⚠️ Error: {e}")
+        return
+    await _reply_long(update, text)
+
+
+# ----------------------------------------------------------------------------
+# Web & social research
+# ----------------------------------------------------------------------------
+async def research_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text("Format: /research <topik/pertanyaan>")
+        return
+    query = " ".join(context.args)
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    await update.message.reply_text("🔎 Meneliti web...")
+    try:
+        results = await research.web_search(query, 6)
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(f"⚠️ Gagal cari: {e}")
+        return
+    if not results:
+        await update.message.reply_text("Tidak ada hasil pencarian.")
+        return
+    src = "\n\n".join(
+        f"[{i+1}] {r['title']} — {r['url']}\n{r['snippet']}" for i, r in enumerate(results)
+    )
+    prompt = (
+        "Berdasarkan hasil pencarian web berikut, jawab pertanyaan user secara akurat dan ringkas. "
+        "Rujuk sumber dengan nomor [n]. Jika info tidak cukup, katakan terus terang.\n\n"
+        f"Pertanyaan: {query}\n\nHASIL:\n{src}"
+    )
+    try:
+        text = await _ask_gemini([gemini.user_msg(prompt)])
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(f"⚠️ Error: {e}")
+        return
+    text += "\n\n*Sumber:*\n" + "\n".join(f"[{i+1}] {r['url']}" for i, r in enumerate(results))
+    await _reply_long(update, text)
+
+
+async def social_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text(
+            "Format: /social [x|reddit|linkedin|facebook|all] <topik>\n"
+            "Contoh: /social x sentimen bonk"
+        )
+        return
+    args = list(context.args)
+    known = {"x", "twitter", "reddit", "linkedin", "facebook", "all"}
+    if args[0].lower() in known:
+        plat = args[0].lower()
+        query = " ".join(args[1:])
+    else:
+        plat = "all"
+        query = " ".join(args)
+    if not query:
+        await update.message.reply_text("Tambahkan topik yang mau diriset.")
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    await update.message.reply_text(f"🔎 Riset sosmed ({plat})...")
+
+    targets = ["x", "reddit", "linkedin", "facebook"] if plat == "all" else [
+        "x" if plat == "twitter" else plat
+    ]
+    gathered: dict[str, list] = {}
+    for t in targets:
+        try:
+            if t == "reddit":
+                rd = await research.reddit_search(query, 5)
+                if rd is None:  # IP diblokir -> pakai search biasa
+                    rd = await research.social_search("reddit", query, 5)
+                    gathered["reddit"] = [
+                        {"title": x["title"], "url": x["url"], "snippet": x["snippet"]} for x in rd
+                    ]
+                else:
+                    gathered["reddit"] = [
+                        {
+                            "title": x["title"],
+                            "url": x["url"],
+                            "snippet": f"r:{x['sub']} ↑{x['ups']} 💬{x['comments']} {x['text']}",
+                        }
+                        for x in rd
+                    ]
+            else:
+                gathered[t] = await research.social_search(t, query, 5)
+        except Exception:  # noqa: BLE001
+            gathered[t] = []
+
+    blocks = []
+    for plt, items in gathered.items():
+        if not items:
+            continue
+        blocks.append(f"### {plt.upper()}")
+        for it in items:
+            blocks.append(f"- {it['title']} — {it['url']}\n  {it.get('snippet', '')}")
+    if not blocks:
+        await update.message.reply_text("Tidak ada hasil dari sumber sosial.")
+        return
+    ctx = "\n".join(blocks)
+    prompt = (
+        "Kamu analis media sosial. Berdasarkan hasil dari berbagai platform berikut, rangkum: "
+        "(1) sentimen umum, (2) narasi/poin yang sering muncul, (3) sinyal penting. "
+        "Sebutkan platform & sumber [url]. Jangan mengarang; kalau data tipis, katakan.\n\n"
+        f"Topik: {query}\n\n{ctx}"
+    )
+    try:
+        text = await _ask_gemini([gemini.user_msg(prompt)])
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(f"⚠️ Error: {e}")
+        return
+    await _reply_long(update, text)
+
+
+# ----------------------------------------------------------------------------
+# New pairs scanner (refresh tiap 5 detik) — GeckoTerminal
+# ----------------------------------------------------------------------------
+def _fmt_pair(p: dict) -> str:
+    line = (
+        f"🚨 *NEW PAIR* — {p.get('name')}\n"
+        f"`{p.get('address')}`\n"
+        f"💧 Liq: {crypto.fmt_big(p.get('liq'))} | FDV: {crypto.fmt_big(p.get('fdv'))} | "
+        f"Vol5m: {crypto.fmt_big(p.get('vol_m5'))}\n"
+    )
+    if p.get("address"):
+        line += f"🔎 /analyze {p['address']}"
+    return line
+
+
+async def _scan_loop(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    seen: set[str] = set()
+    first = True
+    try:
+        while True:
+            try:
+                pairs = await crypto.new_pairs(limit=15)
+            except Exception:  # noqa: BLE001
+                await asyncio.sleep(5)
+                continue
+            new = [p for p in pairs if p.get("id") and p["id"] not in seen]
+            for p in pairs:
+                if p.get("id"):
+                    seen.add(p["id"])
+            if first:
+                first = False
+                await context.bot.send_message(
+                    chat_id, "🟢 Scanner new pairs aktif (refresh 5 detik). Contoh terbaru:"
+                )
+                for p in pairs[:3]:
+                    await context.bot.send_message(
+                        chat_id, _fmt_pair(p), parse_mode="Markdown", disable_web_page_preview=True
+                    )
+            else:
+                for p in new[:5]:
+                    await context.bot.send_message(
+                        chat_id, _fmt_pair(p), parse_mode="Markdown", disable_web_page_preview=True
+                    )
+            await asyncio.sleep(5)
+    except asyncio.CancelledError:
+        pass
+
+
+async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    if chat_id in scan_tasks and not scan_tasks[chat_id].done():
+        await update.message.reply_text("Scanner sudah jalan. /stopscan untuk berhenti.")
+        return
+    scan_tasks[chat_id] = context.application.create_task(_scan_loop(context, chat_id))
+    await update.message.reply_text(
+        "🔍 Memulai scanner new pairs Solana (refresh 5 detik).\n"
+        "Catatan: GMGN memblokir bot, jadi dipakai GeckoTerminal (data new pairs sama).\n"
+        "Berhenti dengan /stopscan."
+    )
+
+
+async def stopscan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    t = scan_tasks.pop(chat_id, None)
+    if t and not t.done():
+        t.cancel()
+        await update.message.reply_text("🛑 Scanner dihentikan.")
+    else:
+        await update.message.reply_text("Tidak ada scanner yang berjalan.")
+
+
+# ----------------------------------------------------------------------------
 # GitHub — /login, /logout, /github (OAuth Device Flow)
 # ----------------------------------------------------------------------------
 async def _finish_login(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, device: dict) -> None:
@@ -386,6 +623,12 @@ def main() -> None:
     app.add_handler(CommandHandler("new", new_meme))
     app.add_handler(CommandHandler("rug", rug))
     app.add_handler(CommandHandler("analyze", analyze))
+    app.add_handler(CommandHandler("scan", scan))
+    app.add_handler(CommandHandler("stopscan", stopscan))
+    app.add_handler(CommandHandler("code", code_cmd))
+    app.add_handler(CommandHandler("reason", reason_cmd))
+    app.add_handler(CommandHandler("research", research_cmd))
+    app.add_handler(CommandHandler("social", social_cmd))
     app.add_handler(CommandHandler("login", login))
     app.add_handler(CommandHandler("logout", logout))
     app.add_handler(CommandHandler("github", github_cmd))

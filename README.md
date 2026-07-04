@@ -14,6 +14,13 @@ AI agent Telegram bertenaga **Google Gemini**, dirancang untuk berjalan di **Ter
   - `/new` — meme coin baru terdeteksi (DexScreener)
   - `/rug <mint>` — rug check + sebaran holder untuk token Solana (RugCheck)
   - `/analyze <address>` — **Deep Research Pro**: narasi/angle, potensi hype, rug check, anti-whale — dirangkai oleh Gemini dari data on-chain nyata
+  - `/scan` & `/stopscan` — **scanner new pairs Solana tiap 5 detik** (GeckoTerminal; GMGN diblokir Cloudflare untuk bot)
+- **Skill coding & reasoning**:
+  - `/code <tugas>` — tulis kode di bahasa/framework apa pun
+  - `/reason <soal>` — analisis mendalam langkah demi langkah
+- **Riset web & media sosial** (gratis, tanpa key):
+  - `/research <topik>` — riset web (DuckDuckGo) + rangkuman bersumber
+  - `/social [x|reddit|linkedin|facebook|all] <topik>` — riset sentimen/narasi lintas platform
 - **Login GitHub** (OAuth Device Flow, tanpa paste token):
   - `/login` — hubungkan akun GitHub ke bot (buka link + masukkan kode)
   - `/github` — lihat akun GitHub yang terhubung
