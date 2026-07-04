@@ -10,6 +10,8 @@ Cara pakai:
 """
 
 import os
+import json
+import asyncio
 import logging
 from collections import defaultdict, deque
 
@@ -24,6 +26,8 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+
+import crypto
 
 # ----------------------------------------------------------------------------
 # Konfigurasi
@@ -80,8 +84,11 @@ history = defaultdict(lambda: deque(maxlen=MAX_HISTORY_TURNS * 2))
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Halo! Aku *ai-agent-v2* 🤖\n"
-        "Kirim pesan apa saja dan aku akan menjawab.\n\n"
-        "Perintah:\n"
+        "Kirim pesan apa saja untuk ngobrol, atau pakai perintah crypto:\n\n"
+        "💵 /price <coin> - harga realtime (CoinGecko)\n"
+        "🆕 /new - meme coin baru terdeteksi\n"
+        "🛡️ /rug <mint> - cek rug + sebaran holder (Solana)\n"
+        "🔬 /analyze <address> - *Deep Research Pro* (narasi, hype, rug, anti-whale)\n\n"
         "/reset - hapus ingatan percakapan\n"
         "/help - bantuan",
         parse_mode="Markdown",
@@ -90,8 +97,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "Cukup ketik pertanyaan atau perintahmu, aku akan balas.\n"
-        "/reset untuk mulai percakapan baru."
+        "Ketik apa saja untuk ngobrol. Perintah crypto:\n"
+        "/price <coin> — harga realtime\n"
+        "/new — meme coin baru\n"
+        "/rug <mint> — rug check (Solana)\n"
+        "/analyze <address> — Deep Research Pro\n"
+        "/reset — mulai percakapan baru"
     )
 
 
@@ -127,12 +138,157 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(reply[i : i + 4000])
 
 
+async def _reply_long(update: Update, text: str) -> None:
+    """Kirim balasan, pecah otomatis kalau melebihi batas Telegram (4096)."""
+    if not text:
+        text = "(kosong)"
+    for i in range(0, len(text), 4000):
+        await update.message.reply_text(text[i : i + 4000], disable_web_page_preview=True)
+
+
+# ---------------------------------------------------------------------------
+# Command crypto
+# ---------------------------------------------------------------------------
+async def price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text("Format: /price <nama/simbol coin>\nContoh: /price solana")
+        return
+    query = " ".join(context.args)
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    try:
+        d = await crypto.get_price(query)
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(f"⚠️ Gagal ambil harga: {e}")
+        return
+    if not d or d.get("price") is None:
+        await update.message.reply_text(f"Coin '{query}' tidak ditemukan di CoinGecko.")
+        return
+    ch = d.get("change24") or 0
+    arrow = "🟢" if ch >= 0 else "🔴"
+    rank = f" (rank #{d['rank']})" if d.get("rank") else ""
+    await update.message.reply_text(
+        f"*{d['name']}* ({d['symbol']}){rank}\n"
+        f"💵 Harga: {crypto.fmt_usd(d['price'])}\n"
+        f"{arrow} 24j: {ch:+.2f}%\n"
+        f"📊 Market cap: {crypto.fmt_big(d['market_cap'])}\n"
+        f"🔁 Vol 24j: {crypto.fmt_big(d['vol24'])}",
+        parse_mode="Markdown",
+    )
+
+
+async def new_meme(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    try:
+        tokens = await crypto.new_meme_tokens(8)
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(f"⚠️ Gagal ambil token baru: {e}")
+        return
+    if not tokens:
+        await update.message.reply_text("Belum ada token baru terdeteksi.")
+        return
+    lines = ["🆕 *Token baru terdeteksi (DexScreener):*\n"]
+    for t in tokens:
+        desc = (t["description"] or "").replace("\n", " ")[:60]
+        lines.append(f"• `{t['address']}` ({t['chain']})\n  {desc}")
+    lines.append("\nAnalisa mendalam: /analyze <address>")
+    await _reply_long(update, "\n".join(lines))
+
+
+async def rug(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text("Format: /rug <mint address Solana>")
+        return
+    mint = context.args[0]
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    try:
+        report = await crypto.rugcheck(mint)
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(f"⚠️ Gagal rugcheck: {e}")
+        return
+    if not report:
+        await update.message.reply_text("Token tidak ditemukan di RugCheck (khusus Solana).")
+        return
+    s = crypto.summarize_rug(report)
+    risks = "\n".join(f"• {r['name']} ({r['level']})" for r in s.get("risks", [])[:6]) or "• tidak ada flag"
+    await _reply_long(
+        update,
+        f"🛡️ *RugCheck*\n"
+        f"Risk score: {s.get('score')} (makin tinggi makin berisiko)\n"
+        f"Total holder: {s.get('total_holders')}\n"
+        f"Top 1 holder: {s.get('top1_pct')}%\n"
+        f"Top 10 holder: {s.get('top10_pct')}%\n"
+        f"LP locked: {s.get('lp_locked_pct')}%\n"
+        f"Mint authority: {'AKTIF ⚠️' if s.get('mint_authority') else 'revoked ✅'}\n"
+        f"Freeze authority: {'AKTIF ⚠️' if s.get('freeze_authority') else 'revoked ✅'}\n\n"
+        f"*Flags:*\n{risks}",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Deep Research Pro — analisa meme coin pakai Gemini
+# ---------------------------------------------------------------------------
+DEEP_RESEARCH_INSTRUCTION = (
+    "Kamu analis crypto meme coin. Berdasarkan DATA on-chain di bawah (fakta nyata, "
+    "jangan mengarang angka), buat analisa ringkas dalam Bahasa Indonesia dengan format:\n"
+    "📊 Ringkasan (nama, chain, harga, umur, likuiditas, mcap)\n"
+    "🎯 Narasi & Angle — usulkan narasi/marketing yang bagus & catchy untuk coin ini\n"
+    "🔥 Potensi Hype — nilai momentum (volume, txns, perubahan harga) skala 1-10 + alasan\n"
+    "🛡️ Rug Check — nilai risiko rug dari mint/freeze authority, LP locked, risk score\n"
+    "🐋 Anti-Whale — evaluasi konsentrasi holder (top1 & top10); tandai bahaya jika >20% di 1 wallet atau >50% di top10\n"
+    "⚖️ Verdict — kesimpulan singkat + level risiko (RENDAH/SEDANG/TINGGI)\n\n"
+    "Akhiri dengan '⚠️ Bukan nasihat keuangan (NFA). DYOR.' "
+    "Jawab padat, pakai bullet seperlunya, jangan bertele-tele."
+)
+
+
+async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text(
+            "Format: /analyze <token address>\n"
+            "Contoh (Solana): /analyze DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
+        )
+        return
+    address = context.args[0]
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    await update.message.reply_text("🔍 Deep Research Pro sedang menganalisa... (5-15 detik)")
+    try:
+        facts = await crypto.deep_research_facts(address)
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(f"⚠️ Gagal ambil data: {e}")
+        return
+    if not facts.get("dex") and not facts.get("rug"):
+        await update.message.reply_text(
+            "Token tidak ditemukan di DexScreener/RugCheck. Pastikan address-nya benar."
+        )
+        return
+    prompt = (
+        DEEP_RESEARCH_INSTRUCTION
+        + "\n\nDATA:\n"
+        + json.dumps(facts, indent=2, ensure_ascii=False, default=str)
+    )
+    try:
+        resp = await asyncio.to_thread(model.generate_content, prompt)
+        text = (resp.text or "").strip()
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Gemini deep research error")
+        await update.message.reply_text(f"⚠️ Error saat analisa: {e}")
+        return
+    dex_url = (facts.get("dex") or {}).get("url")
+    if dex_url:
+        text += f"\n\n🔗 Chart: {dex_url}"
+    await _reply_long(update, text)
+
+
 def main() -> None:
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CommandHandler("price", price))
+    app.add_handler(CommandHandler("new", new_meme))
+    app.add_handler(CommandHandler("rug", rug))
+    app.add_handler(CommandHandler("analyze", analyze))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 
     logger.info("ai-agent-v2 berjalan. Tekan Ctrl+C untuk berhenti.")

@@ -9,6 +9,11 @@ AI agent Telegram bertenaga **Google Gemini**, dirancang untuk berjalan di **Ter
 - Konfigurasi lewat file `.env` (aman, tidak ikut ter-commit)
 - **Skill "Fable 5" (lite)**: kepribadian & disiplin kerja agent diatur lewat `system_prompt.md`
   (jawab langsung, ringkas, ambil inisiatif, ikut bahasa pengguna). Bisa ditimpa lewat env `SYSTEM_PROMPT`.
+- **Crypto realtime + Deep Research Pro** (API gratis, tanpa key):
+  - `/price <coin>` — harga realtime, market cap, volume (CoinGecko)
+  - `/new` — meme coin baru terdeteksi (DexScreener)
+  - `/rug <mint>` — rug check + sebaran holder untuk token Solana (RugCheck)
+  - `/analyze <address>` — **Deep Research Pro**: narasi/angle, potensi hype, rug check, anti-whale — dirangkai oleh Gemini dari data on-chain nyata
 
 ## Yang dibutuhkan
 1. **Token bot Telegram** — buat lewat [@BotFather](https://t.me/BotFather) (`/newbot`).
